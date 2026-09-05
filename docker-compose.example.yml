@@ -1,0 +1,12 @@
+services:
+  bad-files-checker:
+    image: bad-files-checker:latest
+    container_name: bad-files-checker
+    volumes:
+      - /mnt/tank/images:/data/images:ro
+      - /mnt/tank/checker-logs:/logs
+    command:
+      - --scan-path
+      - /data/images
+      - --log-file
+      - /logs/bad-files.log
