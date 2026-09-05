@@ -54,6 +54,13 @@ The Dockerfile also includes an integration-test target. It installs the externa
 docker build --target test .
 ```
 
+Pushes to `main` publish the runtime image to GitHub Container Registry:
+
+```bash
+docker pull ghcr.io/jmkgreen/bad-files-checker:latest
+docker pull ghcr.io/jmkgreen/bad-files-checker:<commit-sha>
+```
+
 ## Current Behavior
 
 - Directory symlinks are skipped.
