@@ -14,6 +14,14 @@ go build ./cmd/bad-files-checker
 bad-files-checker --scan-path /data/images --log-file /logs/bad-files.log
 ```
 
+The scanner defaults to low-impact runtime settings for shared filesystems:
+
+- `--nice 10`: lowers CPU scheduling priority on Linux.
+- `--ionice-class best-effort --ionice-level 7`: uses the lowest best-effort Linux I/O priority.
+- `--scan-delay 0s`: no artificial pause by default; set values such as `10ms` if the storage pool needs extra breathing room.
+
+On non-Linux systems, niceness and ionice settings are accepted for config portability but do not change process priority.
+
 Exit codes:
 
 - `0`: scan completed and no bad folders were found.
@@ -45,7 +53,10 @@ docker run --rm \
   -v /mnt/tank/checker-logs:/logs \
   bad-files-checker:latest \
   --scan-path /data/images \
-  --log-file /logs/bad-files.log
+  --log-file /logs/bad-files.log \
+  --nice 10 \
+  --ionice-class best-effort \
+  --ionice-level 7
 ```
 
 The Dockerfile also includes an integration-test target. It installs the external archive tools and runs the Go test suite as an unprivileged Linux user:
@@ -71,3 +82,7 @@ docker pull ghcr.io/jmkgreen/bad-files-checker:<commit-sha>
 - Permission-denied paths inside the scanned tree are logged as findings where possible.
 - `.tar.xz` and `.txz` validation requires tar validation. The checker does not accept an XZ-only integrity check as proof that the tar archive is valid.
 - RAR validation depends on the installed RAR tool. The provided Docker image uses `unrar-free`, which can validate older RAR formats but is not expected to support every RAR variant, including many RAR5 archives.
+
+## Documentation
+
+See `REQUIREMENTS.md` for high level requirements.

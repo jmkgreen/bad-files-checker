@@ -11,14 +11,16 @@ import (
 )
 
 type Options struct {
-	Clock    func() time.Time
-	OpenFile func(string) (io.ReadCloser, error)
+	Clock             func() time.Time
+	OpenFile          func(string) (io.ReadCloser, error)
+	PerDirectoryDelay time.Duration
 }
 
 type Scanner struct {
 	clock             func() time.Time
 	archiveValidation archiveValidator
 	openFile          func(string) (io.ReadCloser, error)
+	perDirectoryDelay time.Duration
 }
 
 func New(options Options) Scanner {
@@ -35,6 +37,7 @@ func New(options Options) Scanner {
 		clock:             clock,
 		archiveValidation: newArchiveValidator(),
 		openFile:          openFile,
+		perDirectoryDelay: options.PerDirectoryDelay,
 	}
 }
 
@@ -67,6 +70,10 @@ func (s Scanner) Scan(root string) (Result, error) {
 
 		if entry.Type()&os.ModeSymlink != 0 {
 			return filepath.SkipDir
+		}
+
+		if s.perDirectoryDelay > 0 {
+			time.Sleep(s.perDirectoryDelay)
 		}
 
 		finding := s.scanDirectory(path)

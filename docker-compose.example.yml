@@ -10,3 +10,9 @@ services:
       - /data/images
       - --log-file
       - /logs/bad-files.log
+      - --nice
+      - "10"
+      - --ionice-class
+      - best-effort
+      - --ionice-level
+      - "7"

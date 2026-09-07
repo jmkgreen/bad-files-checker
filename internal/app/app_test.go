@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestRunReturnsOneAndWritesLogWhenFindingsExist(t *testing.T) {
@@ -132,10 +133,11 @@ func TestRunReturnsFatalForLogCloseError(t *testing.T) {
 	}
 
 	code, err := run([]string{"--scan-path", root, "--log-file", "bad-files.log"}, &bytes.Buffer{}, &bytes.Buffer{}, dependencies{
-		stat:     func(string) (os.FileInfo, error) { return info, nil },
-		mkdirAll: func(string, os.FileMode) error { return nil },
-		create:   func(string) (io.WriteCloser, error) { return closeFailWriter{}, nil },
-		scan: func(string) (scanner.Result, error) {
+		stat:                 func(string) (os.FileInfo, error) { return info, nil },
+		mkdirAll:             func(string, os.FileMode) error { return nil },
+		create:               func(string) (io.WriteCloser, error) { return closeFailWriter{}, nil },
+		applyRuntimeSettings: func(runtimeSettings) error { return nil },
+		scan: func(string, time.Duration) (scanner.Result, error) {
 			return scanner.Result{Root: root}, nil
 		},
 	})
@@ -191,6 +193,103 @@ func TestParseArgsAcceptsRequiredArgs(t *testing.T) {
 	if cfg.scanPath != "/data/images" || cfg.logFile != "/logs/bad-files.log" {
 		t.Fatalf("cfg = %#v", cfg)
 	}
+	if cfg.runtimeSettings.Nice != defaultNice {
+		t.Fatalf("Nice = %d, want %d", cfg.runtimeSettings.Nice, defaultNice)
+	}
+	if cfg.runtimeSettings.IoniceClass != defaultIoniceClass {
+		t.Fatalf("IoniceClass = %s, want %s", cfg.runtimeSettings.IoniceClass, defaultIoniceClass)
+	}
+	if cfg.runtimeSettings.IoniceLevel != defaultIoniceLevel {
+		t.Fatalf("IoniceLevel = %d, want %d", cfg.runtimeSettings.IoniceLevel, defaultIoniceLevel)
+	}
+}
+
+func TestParseArgsAcceptsLowImpactOverrides(t *testing.T) {
+	cfg, err := parseArgs([]string{
+		"--scan-path", "/data/images",
+		"--log-file", "/logs/bad-files.log",
+		"--nice", "19",
+		"--ionice-class", "idle",
+		"--scan-delay", "10ms",
+	}, &bytes.Buffer{})
+	if err != nil {
+		t.Fatalf("parseArgs returned error: %v", err)
+	}
+	if cfg.runtimeSettings.Nice != 19 {
+		t.Fatalf("Nice = %d, want 19", cfg.runtimeSettings.Nice)
+	}
+	if cfg.runtimeSettings.IoniceClass != "idle" {
+		t.Fatalf("IoniceClass = %s, want idle", cfg.runtimeSettings.IoniceClass)
+	}
+	if cfg.runtimeSettings.IoniceLevel != 0 {
+		t.Fatalf("IoniceLevel = %d, want 0", cfg.runtimeSettings.IoniceLevel)
+	}
+	if cfg.perDirectoryDelay != 10*time.Millisecond {
+		t.Fatalf("perDirectoryDelay = %s, want 10ms", cfg.perDirectoryDelay)
+	}
+}
+
+func TestParseArgsRejectsInvalidPrioritySettings(t *testing.T) {
+	tests := [][]string{
+		{"--nice", "-1"},
+		{"--ionice-class", "realtime"},
+		{"--ionice-class", "best-effort", "--ionice-level", "8"},
+		{"--scan-delay", "-1ms"},
+	}
+
+	for _, testArgs := range tests {
+		args := append([]string{
+			"--scan-path", "/data/images",
+			"--log-file", "/logs/bad-files.log",
+		}, testArgs...)
+		if _, err := parseArgs(args, &bytes.Buffer{}); err == nil {
+			t.Fatalf("parseArgs(%v) returned nil error", args)
+		}
+	}
+}
+
+func TestRunAppliesRuntimeSettingsAndScanDelay(t *testing.T) {
+	root := t.TempDir()
+	info, err := os.Stat(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var gotSettings runtimeSettings
+	var gotDelay time.Duration
+
+	code, err := run([]string{
+		"--scan-path", root,
+		"--log-file", "bad-files.log",
+		"--nice", "12",
+		"--ionice-class", "best-effort",
+		"--ionice-level", "6",
+		"--scan-delay", "5ms",
+	}, &bytes.Buffer{}, &bytes.Buffer{}, dependencies{
+		stat:     func(string) (os.FileInfo, error) { return info, nil },
+		mkdirAll: func(string, os.FileMode) error { return nil },
+		create:   func(string) (io.WriteCloser, error) { return closeOKWriter{}, nil },
+		applyRuntimeSettings: func(settings runtimeSettings) error {
+			gotSettings = settings
+			return nil
+		},
+		scan: func(_ string, delay time.Duration) (scanner.Result, error) {
+			gotDelay = delay
+			return scanner.Result{Root: root}, nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("run returned error: %v", err)
+	}
+	if code != ExitOK {
+		t.Fatalf("code = %d, want %d", code, ExitOK)
+	}
+	if gotSettings != (runtimeSettings{Nice: 12, IoniceClass: "best-effort", IoniceLevel: 6}) {
+		t.Fatalf("settings = %#v", gotSettings)
+	}
+	if gotDelay != 5*time.Millisecond {
+		t.Fatalf("delay = %s, want 5ms", gotDelay)
+	}
 }
 
 func writeAppFile(t *testing.T, path string, content string) {
@@ -208,6 +307,16 @@ func (closeFailWriter) Write(p []byte) (int, error) {
 
 func (closeFailWriter) Close() error {
 	return errors.New("close failed")
+}
+
+type closeOKWriter struct{}
+
+func (closeOKWriter) Write(p []byte) (int, error) {
+	return len(p), nil
+}
+
+func (closeOKWriter) Close() error {
+	return nil
 }
 
 type failingStatusWriter struct{}

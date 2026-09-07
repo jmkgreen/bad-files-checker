@@ -21,6 +21,13 @@ Required inputs:
 
 Optional inputs may be added later, but the first implementation should keep the interface simple and predictable.
 
+Filesystem-friendliness inputs:
+
+- `--nice`: process niceness to request before scanning. The default should be a lower-priority user-level value of `10`.
+- `--ionice-class`: Linux I/O priority class. The default should be `best-effort`; `none` should disable I/O priority changes and `idle` should be available for very low-impact runs.
+- `--ionice-level`: Linux best-effort priority data value. The default should be `7`, the lowest best-effort priority. This only applies to the `best-effort` class.
+- `--scan-delay`: optional delay before scanning each directory. The default should be `0s` so scans are not unnecessarily slow unless an operator opts in.
+
 ## Folder Conditions To Report
 
 The utility should report the path to any folder that meets one or more of these conditions:
@@ -127,6 +134,8 @@ services:
 
 - Prefer a small, portable implementation with no unnecessary runtime services.
 - The scanner should avoid modifying the scanned tree.
+- The process should request low-impact CPU and I/O scheduling defaults where supported, because the primary scan target may be shared storage.
+- Priority settings should be user-level and safe to run without elevated privileges. Unsupported platforms should accept the settings without failing solely because the OS cannot apply them.
 - Directory symlinks should not be followed by default.
 - Permission-denied paths should be logged and should not crash the scan unless the root scan path itself is inaccessible.
 - Paths in logs should be the container-visible paths, because those are the paths the process can reliably observe.
