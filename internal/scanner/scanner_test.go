@@ -76,6 +76,37 @@ func TestScanReportsNestedFindings(t *testing.T) {
 	assertIssue(t, findings, "child", IssueEmptyFolder)
 }
 
+func TestScanReportsProgress(t *testing.T) {
+	root := t.TempDir()
+	mkdir(t, filepath.Join(root, "empty"))
+	writeFile(t, filepath.Join(root, "image.jpg"), "ok")
+
+	var updates []Progress
+	result, err := New(Options{
+		Clock: fixedClock,
+		Progress: func(progress Progress) {
+			updates = append(updates, progress)
+		},
+	}).Scan(root)
+	if err != nil {
+		t.Fatalf("Scan returned error: %v", err)
+	}
+
+	if len(updates) == 0 {
+		t.Fatal("Progress was not called")
+	}
+	last := updates[len(updates)-1]
+	if last.DirectoriesScanned != 2 {
+		t.Fatalf("DirectoriesScanned = %d, want 2", last.DirectoriesScanned)
+	}
+	if last.BadFoldersFound != len(result.Findings) {
+		t.Fatalf("BadFoldersFound = %d, want %d", last.BadFoldersFound, len(result.Findings))
+	}
+	if last.IssuesFound != 1 {
+		t.Fatalf("IssuesFound = %d, want 1", last.IssuesFound)
+	}
+}
+
 func TestScanReportsNonArchiveReadFailure(t *testing.T) {
 	root := t.TempDir()
 	folder := filepath.Join(root, "set")

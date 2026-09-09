@@ -7,6 +7,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
 	"time"
 
 	"bad-files-checker/internal/report"
@@ -24,6 +26,7 @@ type config struct {
 	logFile           string
 	runtimeSettings   runtimeSettings
 	perDirectoryDelay time.Duration
+	progressInterval  time.Duration
 }
 
 type dependencies struct {
@@ -31,7 +34,7 @@ type dependencies struct {
 	mkdirAll             func(string, os.FileMode) error
 	create               func(string) (io.WriteCloser, error)
 	applyRuntimeSettings func(runtimeSettings) error
-	scan                 func(string, time.Duration) (scanner.Result, error)
+	scan                 func(string, time.Duration, func(scanner.Progress)) (scanner.Result, error)
 }
 
 func Run(args []string, stdout io.Writer, stderr io.Writer) (int, error) {
@@ -40,10 +43,11 @@ func Run(args []string, stdout io.Writer, stderr io.Writer) (int, error) {
 		mkdirAll:             os.MkdirAll,
 		create:               func(path string) (io.WriteCloser, error) { return os.Create(path) },
 		applyRuntimeSettings: applyRuntimeSettings,
-		scan: func(path string, perDirectoryDelay time.Duration) (scanner.Result, error) {
+		scan: func(path string, perDirectoryDelay time.Duration, progress func(scanner.Progress)) (scanner.Result, error) {
 			scan := scanner.New(scanner.Options{
 				Clock:             time.Now,
 				PerDirectoryDelay: perDirectoryDelay,
+				Progress:          progress,
 			})
 			return scan.Scan(path)
 		},
@@ -79,14 +83,27 @@ func run(args []string, stdout io.Writer, stderr io.Writer, deps dependencies) (
 	if err != nil {
 		return ExitFatal, fmt.Errorf("create log file: %w", err)
 	}
+	timestampedLog := newTimestampedWriter(log, time.Now)
+	if _, err := fmt.Fprintf(timestampedLog, "Run begun: scanning %s\n", cfg.scanPath); err != nil {
+		log.Close()
+		return ExitFatal, fmt.Errorf("write log: %w", err)
+	}
 
-	result, err := deps.scan(cfg.scanPath, cfg.perDirectoryDelay)
+	progressSnapshot := newProgressSnapshot()
+	stopProgress := startProgressLogging(timestampedLog, progressSnapshot, cfg.progressInterval)
+
+	result, err := deps.scan(cfg.scanPath, cfg.perDirectoryDelay, progressSnapshot.update)
+	stopProgress()
 	if err != nil {
 		log.Close()
 		return ExitFatal, err
 	}
 
-	if err := report.WriteText(log, result); err != nil {
+	if _, err := fmt.Fprintln(timestampedLog, "Run completed: writing scan report"); err != nil {
+		log.Close()
+		return ExitFatal, fmt.Errorf("write log: %w", err)
+	}
+	if err := report.WriteText(timestampedLog, result); err != nil {
 		log.Close()
 		return ExitFatal, fmt.Errorf("write log: %w", err)
 	}
@@ -124,6 +141,7 @@ func parseArgs(args []string, stderr io.Writer) (config, error) {
 	fs.StringVar(&cfg.runtimeSettings.IoniceClass, "ionice-class", defaultIoniceClass, "Linux I/O priority class: none, idle, or best-effort")
 	fs.IntVar(&cfg.runtimeSettings.IoniceLevel, "ionice-level", defaultIoniceLevel, "Linux best-effort I/O priority level, from 0 highest to 7 lowest")
 	fs.DurationVar(&cfg.perDirectoryDelay, "scan-delay", 0, "optional pause before each directory scan, e.g. 10ms")
+	fs.DurationVar(&cfg.progressInterval, "progress-interval", 30*time.Second, "how often to write in-progress scan counts to the log; set 0 to disable")
 
 	if err := fs.Parse(args); err != nil {
 		return cfg, err
@@ -145,6 +163,107 @@ func parseArgs(args []string, stderr io.Writer) (config, error) {
 	if cfg.perDirectoryDelay < 0 {
 		return cfg, fmt.Errorf("scan delay cannot be negative")
 	}
+	if cfg.progressInterval < 0 {
+		return cfg, fmt.Errorf("progress interval cannot be negative")
+	}
 
 	return cfg, nil
+}
+
+type timestampedWriter struct {
+	writer      io.Writer
+	clock       func() time.Time
+	mu          sync.Mutex
+	atLineStart bool
+}
+
+func newTimestampedWriter(writer io.Writer, clock func() time.Time) *timestampedWriter {
+	return &timestampedWriter{writer: writer, clock: clock, atLineStart: true}
+}
+
+func (w *timestampedWriter) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	remaining := string(p)
+	written := len(p)
+	for len(remaining) > 0 {
+		if w.atLineStart {
+			if _, err := fmt.Fprintf(w.writer, "%s ", w.clock().Format("2006-01-02T15:04:05Z07:00")); err != nil {
+				return 0, err
+			}
+			w.atLineStart = false
+		}
+
+		index := strings.IndexByte(remaining, '\n')
+		if index == -1 {
+			if _, err := io.WriteString(w.writer, remaining); err != nil {
+				return 0, err
+			}
+			break
+		}
+
+		if _, err := io.WriteString(w.writer, remaining[:index+1]); err != nil {
+			return 0, err
+		}
+		w.atLineStart = true
+		remaining = remaining[index+1:]
+	}
+	return written, nil
+}
+
+type progressSnapshot struct {
+	mu       sync.Mutex
+	progress scanner.Progress
+}
+
+func newProgressSnapshot() *progressSnapshot {
+	return &progressSnapshot{}
+}
+
+func (s *progressSnapshot) update(progress scanner.Progress) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.progress = progress
+}
+
+func (s *progressSnapshot) current() scanner.Progress {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.progress
+}
+
+func startProgressLogging(writer io.Writer, snapshot *progressSnapshot, interval time.Duration) func() {
+	if interval == 0 {
+		return func() {}
+	}
+
+	done := make(chan struct{})
+	stopped := make(chan struct{})
+	go func() {
+		defer close(stopped)
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				progress := snapshot.current()
+				fmt.Fprintf(
+					writer,
+					"Progress: directories scanned=%d, bad folders found=%d, bad file issues found=%d, current=%s\n",
+					progress.DirectoriesScanned,
+					progress.BadFoldersFound,
+					progress.IssuesFound,
+					progress.CurrentPath,
+				)
+			case <-done:
+				return
+			}
+		}
+	}()
+
+	return func() {
+		close(done)
+		<-stopped
+	}
 }

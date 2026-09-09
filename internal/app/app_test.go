@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -54,6 +55,23 @@ func TestRunReturnsZeroWhenNoFindingsExist(t *testing.T) {
 	}
 	if code != ExitOK {
 		t.Fatalf("code = %d, want %d", code, ExitOK)
+	}
+
+	log, err := os.ReadFile(logFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !regexp.MustCompile(`(?m)^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}`).Match(log) {
+		t.Fatalf("log lines are not timestamped:\n%s", string(log))
+	}
+	for _, want := range []string{
+		"Run begun: scanning",
+		"Run completed: writing scan report",
+		"No bad folders found.",
+	} {
+		if !strings.Contains(string(log), want) {
+			t.Fatalf("log missing %q:\n%s", want, string(log))
+		}
 	}
 }
 
@@ -137,7 +155,7 @@ func TestRunReturnsFatalForLogCloseError(t *testing.T) {
 		mkdirAll:             func(string, os.FileMode) error { return nil },
 		create:               func(string) (io.WriteCloser, error) { return closeFailWriter{}, nil },
 		applyRuntimeSettings: func(runtimeSettings) error { return nil },
-		scan: func(string, time.Duration) (scanner.Result, error) {
+		scan: func(string, time.Duration, func(scanner.Progress)) (scanner.Result, error) {
 			return scanner.Result{Root: root}, nil
 		},
 	})
@@ -273,8 +291,14 @@ func TestRunAppliesRuntimeSettingsAndScanDelay(t *testing.T) {
 			gotSettings = settings
 			return nil
 		},
-		scan: func(_ string, delay time.Duration) (scanner.Result, error) {
+		scan: func(_ string, delay time.Duration, progress func(scanner.Progress)) (scanner.Result, error) {
 			gotDelay = delay
+			progress(scanner.Progress{
+				DirectoriesScanned: 3,
+				BadFoldersFound:    1,
+				IssuesFound:        2,
+				CurrentPath:        filepath.Join(root, "set"),
+			})
 			return scanner.Result{Root: root}, nil
 		},
 	})
@@ -292,11 +316,56 @@ func TestRunAppliesRuntimeSettingsAndScanDelay(t *testing.T) {
 	}
 }
 
+func TestTimestampedWriterPrefixesEveryLine(t *testing.T) {
+	var output bytes.Buffer
+	writer := newTimestampedWriter(&output, fixedAppClock)
+
+	if _, err := writer.Write([]byte("first\nsecond\n")); err != nil {
+		t.Fatal(err)
+	}
+
+	want := "2026-09-04T09:30:00Z first\n2026-09-04T09:30:00Z second\n"
+	if output.String() != want {
+		t.Fatalf("output = %q, want %q", output.String(), want)
+	}
+}
+
+func TestProgressLoggingWritesLatestCounts(t *testing.T) {
+	var output bytes.Buffer
+	snapshot := newProgressSnapshot()
+	snapshot.update(scanner.Progress{
+		DirectoriesScanned: 7,
+		BadFoldersFound:    2,
+		IssuesFound:        4,
+		CurrentPath:        "/data/images/set",
+	})
+
+	stop := startProgressLogging(&output, snapshot, time.Millisecond)
+	time.Sleep(20 * time.Millisecond)
+	stop()
+
+	for _, want := range []string{
+		"Progress:",
+		"directories scanned=7",
+		"bad folders found=2",
+		"bad file issues found=4",
+		"current=/data/images/set",
+	} {
+		if !strings.Contains(output.String(), want) {
+			t.Fatalf("progress log missing %q:\n%s", want, output.String())
+		}
+	}
+}
+
 func writeAppFile(t *testing.T, path string, content string) {
 	t.Helper()
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func fixedAppClock() time.Time {
+	return time.Date(2026, 9, 4, 9, 30, 0, 0, time.UTC)
 }
 
 type closeFailWriter struct{}

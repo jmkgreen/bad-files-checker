@@ -20,6 +20,13 @@ type Result struct {
 	Findings  []FolderFinding
 }
 
+type Progress struct {
+	DirectoriesScanned int
+	BadFoldersFound    int
+	IssuesFound        int
+	CurrentPath        string
+}
+
 type FolderFinding struct {
 	Path    string
 	Issues  []IssueType

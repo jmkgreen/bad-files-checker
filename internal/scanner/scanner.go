@@ -14,6 +14,7 @@ type Options struct {
 	Clock             func() time.Time
 	OpenFile          func(string) (io.ReadCloser, error)
 	PerDirectoryDelay time.Duration
+	Progress          func(Progress)
 }
 
 type Scanner struct {
@@ -21,6 +22,7 @@ type Scanner struct {
 	archiveValidation archiveValidator
 	openFile          func(string) (io.ReadCloser, error)
 	perDirectoryDelay time.Duration
+	progress          func(Progress)
 }
 
 func New(options Options) Scanner {
@@ -38,6 +40,7 @@ func New(options Options) Scanner {
 		archiveValidation: newArchiveValidator(),
 		openFile:          openFile,
 		perDirectoryDelay: options.PerDirectoryDelay,
+		progress:          options.Progress,
 	}
 }
 
@@ -54,10 +57,15 @@ func (s Scanner) Scan(root string) (Result, error) {
 		ScannedAt: s.clock(),
 		Root:      root,
 	}
+	progress := Progress{}
 
 	err = filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			result.addFileIssue(walkErrorFolder(path, entry), path, IssuePermissionDenied, walkErr.Error())
+			progress.BadFoldersFound = len(result.Findings)
+			progress.IssuesFound++
+			progress.CurrentPath = path
+			s.reportProgress(progress)
 			if entry != nil && entry.IsDir() {
 				return filepath.SkipDir
 			}
@@ -77,9 +85,14 @@ func (s Scanner) Scan(root string) (Result, error) {
 		}
 
 		finding := s.scanDirectory(path)
+		progress.DirectoriesScanned++
+		progress.CurrentPath = path
 		if len(finding.Issues) > 0 {
 			result.Findings = append(result.Findings, finding)
 		}
+		progress.IssuesFound += len(finding.Details)
+		progress.BadFoldersFound = len(result.Findings)
+		s.reportProgress(progress)
 		return nil
 	})
 	if err != nil {
@@ -91,6 +104,12 @@ func (s Scanner) Scan(root string) (Result, error) {
 	})
 
 	return result, nil
+}
+
+func (s Scanner) reportProgress(progress Progress) {
+	if s.progress != nil {
+		s.progress(progress)
+	}
 }
 
 func (s Scanner) scanDirectory(path string) FolderFinding {

@@ -19,6 +19,7 @@ The scanner defaults to low-impact runtime settings for shared filesystems:
 - `--nice 10`: lowers CPU scheduling priority on Linux.
 - `--ionice-class best-effort --ionice-level 7`: uses the lowest best-effort Linux I/O priority.
 - `--scan-delay 0s`: no artificial pause by default; set values such as `10ms` if the storage pool needs extra breathing room.
+- `--progress-interval 30s`: writes periodic in-progress counts to the log; set `0` to disable progress updates.
 
 On non-Linux systems, niceness and ionice settings are accepted for config portability but do not change process priority.
 
@@ -56,8 +57,11 @@ docker run --rm \
   --log-file /logs/bad-files.log \
   --nice 10 \
   --ionice-class best-effort \
-  --ionice-level 7
+  --ionice-level 7 \
+  --progress-interval 30s
 ```
+
+The log file is created at startup and each log line is prefixed with a timestamp. Long scans write progress lines containing directories scanned, bad folders found, bad file issues found, and the current directory.
 
 The Dockerfile also includes an integration-test target. It installs the external archive tools and runs the Go test suite as an unprivileged Linux user:
 

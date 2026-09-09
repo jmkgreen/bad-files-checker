@@ -19,14 +19,13 @@ Required inputs:
 - `--scan-path`: root directory to scan recursively.
 - `--log-file`: path to write the scan results.
 
-Optional inputs may be added later, but the first implementation should keep the interface simple and predictable.
-
 Filesystem-friendliness inputs:
 
 - `--nice`: process niceness to request before scanning. The default should be a lower-priority user-level value of `10`.
 - `--ionice-class`: Linux I/O priority class. The default should be `best-effort`; `none` should disable I/O priority changes and `idle` should be available for very low-impact runs.
 - `--ionice-level`: Linux best-effort priority data value. The default should be `7`, the lowest best-effort priority. This only applies to the `best-effort` class.
 - `--scan-delay`: optional delay before scanning each directory. The default should be `0s` so scans are not unnecessarily slow unless an operator opts in.
+- `--progress-interval`: optional interval for writing in-progress counts to the log. The default should be `30s`; `0` should disable progress updates.
 
 ## Folder Conditions To Report
 
@@ -78,6 +77,8 @@ Each reported folder should include:
 - Timestamp for the scan.
 
 The process should create the log file path if possible, including parent directories.
+
+The process should write a startup line immediately after opening the log, prefix each log line with a timestamp, and periodically write progress lines while a scan is still running. Progress lines should include directories scanned, bad folders found, bad file issues found, and the current directory.
 
 ## Exit Behavior
 

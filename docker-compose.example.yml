@@ -16,3 +16,5 @@ services:
       - best-effort
       - --ionice-level
       - "7"
+      - --progress-interval
+      - 30s
